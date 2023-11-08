@@ -9,6 +9,72 @@ import prettytable as pt
 from .defaults import INTERCEPT_NAME
 
 # DATA
+def prepare_data(raw_data_df, sample_weights=None, fold_idx=None, fold_num=0):
+    """Prepare data for model training.
+
+    Parameters
+    ----------
+    raw_data_df : pandas DataFrame
+        Raw data. Refer to parameter `dataset_csv_file` in `load_data_from_csv` for details.
+    sample_weights : NumPy array, default=None
+        Sample weights. Refer to parameter `sample_weights_csv_file` in `load_data_from_csv` for details.
+    fold_idx :  NumPy array, default=None
+        Cross-validation indices. Refer to parameter `fold_csv_file` in `load_data_from_csv` for details.
+    fold_num : int, default=0
+        Fold to use in cross-validation. Only used if `fold_idx` is passed. 
+        Refer to parameter `fold_num` in `load_data_from_csv` for details.
+    
+    Returns
+    -------
+    data : dict
+        The prepared training data. See `load_data_from_csv` for details.
+    """
+    raw_data = raw_data_df.to_numpy()
+    data_headers = list(raw_data_df.columns.values)
+    N = raw_data.shape[0]
+
+    # setup Y vector and Y_name
+    Y_col_idx = [0]
+    Y = raw_data[:, Y_col_idx]
+    Y_name = data_headers[Y_col_idx[0]]
+    Y[Y == 0] = -1
+
+    # setup X and X_names
+    X_col_idx = [j for j in range(raw_data.shape[1]) if j not in Y_col_idx]
+    X = raw_data[:, X_col_idx]
+    variable_names = [data_headers[j] for j in X_col_idx]
+
+    # insert a column of ones to X for the intercept
+    X = np.insert(arr=X, obj=0, values=np.ones(N), axis=1)
+    variable_names.insert(0, INTERCEPT_NAME)
+
+    if sample_weights is None:
+        sample_weights = np.ones(N)
+
+    data = {
+        'X': X,
+        'Y': Y,
+        'variable_names': variable_names,
+        'outcome_name': Y_name,
+        'sample_weights': sample_weights,
+        }
+
+    if fold_idx is not None:
+        K = max(fold_idx)
+        all_fold_nums = np.sort(np.unique(fold_idx))
+        assert len(fold_idx) == N, "dimension mismatch: read %r fold indices (expected N = %r)" % (len(fold_idx), N)
+        assert np.all(all_fold_nums == np.arange(1, K+1)), "folds should contain indices between 1 to %r" % K
+        assert fold_num in np.arange(0, K+1), "fold_num should either be 0 or an integer between 1 to %r" % K
+        if fold_num >= 1:
+            train_idx = fold_num != fold_idx
+            data['X'] = data['X'][train_idx,]
+            data['Y'] = data['Y'][train_idx]
+            data['sample_weights'] = data['sample_weights'][train_idx]
+
+    assert check_data(data)
+    return data
+
+
 def load_data_from_csv(dataset_csv_file, sample_weights_csv_file = None, fold_csv_file = None, fold_num = 0):
     """
 
@@ -52,31 +118,10 @@ def load_data_from_csv(dataset_csv_file, sample_weights_csv_file = None, fold_cs
     dataset_csv_file = Path(dataset_csv_file)
     if not dataset_csv_file.exists():
         raise IOError('could not find dataset_csv_file: %s' % dataset_csv_file)
-
     df = pd.read_csv(dataset_csv_file, sep = ',')
 
-    raw_data = df.to_numpy()
-    data_headers = list(df.columns.values)
-    N = raw_data.shape[0]
-
-    # setup Y vector and Y_name
-    Y_col_idx = [0]
-    Y = raw_data[:, Y_col_idx]
-    Y_name = data_headers[Y_col_idx[0]]
-    Y[Y == 0] = -1
-
-    # setup X and X_names
-    X_col_idx = [j for j in range(raw_data.shape[1]) if j not in Y_col_idx]
-    X = raw_data[:, X_col_idx]
-    variable_names = [data_headers[j] for j in X_col_idx]
-
-    # insert a column of ones to X for the intercept
-    X = np.insert(arr=X, obj=0, values=np.ones(N), axis=1)
-    variable_names.insert(0, INTERCEPT_NAME)
-
-
     if sample_weights_csv_file is None:
-        sample_weights = np.ones(N)
+        sample_weights = None
     else:
         sample_weights_csv_file = Path(sample_weights_csv_file)
         if not sample_weights_csv_file.exists():
@@ -84,36 +129,18 @@ def load_data_from_csv(dataset_csv_file, sample_weights_csv_file = None, fold_cs
         sample_weights = pd.read_csv(sample_weights_csv_file, sep=',', header=None)
         sample_weights = sample_weights.to_numpy()
 
-    data = {
-        'X': X,
-        'Y': Y,
-        'variable_names': variable_names,
-        'outcome_name': Y_name,
-        'sample_weights': sample_weights,
-        }
-
     #load folds
-    if fold_csv_file is not None:
+    if fold_csv_file is None:
+        fold_idx = None
+    else:
         fold_csv_file = Path(fold_csv_file)
         if not fold_csv_file.exists():
             raise IOError('could not find fold_csv_file: %s' % fold_csv_file)
 
         fold_idx = pd.read_csv(fold_csv_file, sep=',', header=None)
         fold_idx = fold_idx.values.flatten()
-        K = max(fold_idx)
-        all_fold_nums = np.sort(np.unique(fold_idx))
-        assert len(fold_idx) == N, "dimension mismatch: read %r fold indices (expected N = %r)" % (len(fold_idx), N)
-        assert np.all(all_fold_nums == np.arange(1, K+1)), "folds should contain indices between 1 to %r" % K
-        assert fold_num in np.arange(0, K+1), "fold_num should either be 0 or an integer between 1 to %r" % K
-        if fold_num >= 1:
-            #test_idx = fold_num == fold_idx
-            train_idx = fold_num != fold_idx
-            data['X'] = data['X'][train_idx,]
-            data['Y'] = data['Y'][train_idx]
-            data['sample_weights'] = data['sample_weights'][train_idx]
 
-    assert check_data(data)
-    return data
+    return prepare_data(df, sample_weights, fold_idx, fold_num)
 
 
 def check_data(data):
